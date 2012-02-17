@@ -11,6 +11,9 @@ module SearchDimensions
       %w{label field param value_class facet_options}.each do |attr|
         send("#{attr}=", params[attr]) if params[attr]
       end
+      
+      @param ||= field
+      @label ||= field.titleize
     end
     
     def value_class
@@ -30,6 +33,25 @@ module SearchDimensions
     end    
   end
   
+  # This mix-in allows you to add search dimensions to your application's models based on
+  # fields defined by the model.
+  #
+  # Example:
+  #
+  #   class Product < ActiveRecord::Base
+  #     include SearchDimensions::ModelExtensions
+  #     
+  #     search_dimension :manufacturer
+  #     search_dimension :category, SearchDimensions::HierarchicalDimension
+  #     search_dimension :rating, SearchDimensions::RatingDimension
+  #   end
+  #
+  #   Product.search_dimensions
+  #     => { 
+  #          :manufacturer => #<SearchDimensions::Dimension#0x12345>, 
+  #          :category     => #<SearchDimensions::HierarchicalDimension#0x12345>, 
+  #          :rating       => #<SearchDimensions::RatingDimension#0x12345>
+  #        }
   module ModelExtensions
     extend ActiveSupport::Concern
     
@@ -41,7 +63,13 @@ module SearchDimensions
       @search_dimensions = {}
     end
     
-    module ClassMethods    
+    module ClassMethods
+      # Define a new search dimension for this class.
+      #
+      # *Arguments:*
+      # * field: the name of the field in this model to create a dimension for.
+      # * dimension_class (optional): the subclass of SearchDimensions::Dimension to use for this dimension.  If unspecified, will use SearchDimensions::Dimension.
+      # * options: a hash of options that will be passed to the dimension's constructor.
       def search_dimension(field, *args)
         params = args.extract_options!
         klass = args.first || SearchDimensions::Dimension
@@ -49,6 +77,20 @@ module SearchDimensions
         search_dimensions[field] = klass.new(self, params.merge(:field => field))
       end
       
+      # Takes a params hash (presumably from the user's HTTP request) and returns a hash mapping
+      # each search dimension's field name to a SearchDimensions::DimensionValue object (or an
+      # object of the appropriate value class for this dimension).
+      #
+      # For example, in our Product example above, for the url:
+      #
+      #   http://myapp.com/products?manufacturer=Apple&rating=4
+      #
+      # This method might return:
+      # 
+      #   {
+      #     :manufacturer => #<SearchDimensions::Dimension#0x12345 @value="Apple">,
+      #     :rating       => #<SearchDimensions::RatingValue#0x12345 @value=4>,
+      #   }
       def dimension_values_from_params(params)
         search_dimensions.inject({}) do |result, (field, dimension)|
           result[field] = dimension.value_from_params(params)
@@ -56,6 +98,23 @@ module SearchDimensions
         end
       end
       
+      # Configures a Sunspot search based on a parameters hash.  Meant to be used
+      # in a controller action when actually performing a search.
+      #
+      # *Arguments:*
+      # * dsl: A Sunspot::Search::DSL object.  In the context of a "search" block, this will be "self".
+      #
+      # Example:
+      #
+      #   class ProductsController < ActionController::Base
+      #
+      #     def search
+      #       @search = Product.search do
+      #         Product.configure_search!(self, params)
+      #       end
+      #     end
+      #     
+      #   end
       def configure_search!(dsl, params)
         search_dimensions.each do |field, dimension|
           dimension.configure_search!(dsl, params)
@@ -81,6 +140,24 @@ module SearchDimensions
       @value.present?
     end
     
+    # Configures a Sunspot search for this dimension value.
+    #
+    # *Arguments:*
+    # * dsl: A Sunspot::Search::DSL object.  In the context of a "search" block, this will be "self".
+    #
+    # Example:
+    #
+    #   class ProductsController < ActionController::Base
+    #
+    #     def search
+    #       dimensions = Product.dimension_values_from_params(params)
+    #  
+    #       @search = Product.search do
+    #         dimensions.each { |field, value| value.configure_search!(self) }
+    #       end
+    #     end
+    #     
+    #   end
     def configure_search!(dsl)
       if has_value?
         dsl.with(dimension.field).equal_to(value)
@@ -106,6 +183,10 @@ module SearchDimensions
     
     def display?
       true
+    end
+    
+    def param_value
+      value
     end
   end
   
@@ -301,30 +382,6 @@ module SearchDimensions
  	      # http://outoftime.lighthouseapp.com/projects/20339/tickets/187-facet-prefixes-with-slashes-are-escaped
  	      params[:"f.#{Sunspot::Setup.for(dimension.model_class).field(dimension.field).indexed_name}.facet.prefix"] = child_facet_prefix
       end
-    end
-  end
-  
-  class NTEEDimension < HierarchicalDimension
-    def value_class
-      NTEECategory
-    end
-  end
-  
-  class NTEECategory < HierarchicalValue
-    def category
-      NTEE.category(leaf_value)
-    end
-  
-    def label
-      if category
-        category.name
-      else
-        super
-      end
-    end
-    
-    def facet_children(search)
-      super.sort_by(&:label)
     end
   end
 end
