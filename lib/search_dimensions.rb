@@ -1,4 +1,5 @@
 require "search_dimensions/version"
+require "active_support"
 
 module SearchDimensions
   class Dimension
