@@ -14,7 +14,7 @@ module SearchDimensions
       end
       
       @param ||= field
-      @label ||= field.titleize
+      @label ||= field.to_s.titleize
     end
     
     def value_class
